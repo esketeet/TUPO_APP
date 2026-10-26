@@ -1,0 +1,97 @@
+import 'package:flutter/material.dart';
+import 'package:hive/hive.dart';
+import 'package:url_launcher/url_launcher.dart';
+import 'package:uuid/uuid.dart';
+import '../../models/report_model.dart';
+import '../../data/tots_data.dart';
+
+class TotDashboard extends StatefulWidget {
+  final String totId; final String totName; final Map totData;
+  TotDashboard({required this.totId, required this.totName, required this.totData});
+  @override _TotDashboardState createState() => _TotDashboardState();
+}
+
+class _TotDashboardState extends State<TotDashboard> {
+  List<SurvivorReport> reports = [];
+  @override void initState(){super.initState(); load();}
+  void load(){
+    var box = Hive.box('reports');
+    reports = box.values.cast<SurvivorReport>().toList().reversed.toList();
+    setState((){});
+  }
+  void callSurvivor(String phone) async {
+    final uri = Uri.parse('tel:$phone');
+    if(await canLaunchUrl(uri)) await launchUrl(uri);
+  }
+  void openWriteReport(SurvivorReport? r) {
+    Navigator.push(context, MaterialPageRoute(builder: (_)=> WriteReportScreen(totId: widget.totId, totName: widget.totName, survivorReport: r)));
+  }
+
+  @override Widget build(BuildContext context){
+    return Scaffold(
+      appBar: AppBar(title: Text('TOT ${widget.totName} - ${widget.totId}'), backgroundColor: Colors.black87, actions: [IconButton(icon: Icon(Icons.add), onPressed: ()=>openWriteReport(null))]),
+      body: Column(children: [
+        Container(padding: EdgeInsets.all(12), color: Colors.grey.shade100, child: Row(children: [
+          Icon(Icons.person, size: 16), SizedBox(width: 4), Text('${widget.totData['sector']} | ${widget.totData['subcounty']}'),
+          Spacer(), Text('Sector: ${widget.totData['sector']}', style: TextStyle(fontWeight: FontWeight.bold))
+        ])),
+        Expanded(child: reports.isEmpty ? Center(child: Text('No survivor cases yet')) : ListView.builder(itemCount: reports.length, itemBuilder: (c,i){
+          var r = reports[i];
+          var cfg = TotData.sectorConfig[r.need] ?? TotData.sectorConfig['GBV / Violence']!;
+          return Card(margin: EdgeInsets.all(8), child: ListTile(
+            leading: CircleAvatar(backgroundColor: Color(cfg['color']), child: Text(r.need[0])),
+            title: Text('${r.survivorName} - ${r.need}'),
+            subtitle: Text('${r.locationTag} | ${r.description}\nPhone: ${r.phone1} | Age: ${r.age}'),
+            isThreeLine: true,
+            trailing: Column(children: [
+              IconButton(icon: Icon(Icons.call, color: Colors.green), onPressed: ()=>callSurvivor(r.phone1)),
+              IconButton(icon: Icon(Icons.edit_note, color: Colors.blue), onPressed: ()=>openWriteReport(r)),
+            ]),
+          ));
+        })),
+      ]),
+      floatingActionButton: FloatingActionButton.extended(onPressed: ()=>openWriteReport(null), label: Text('Write TOT Report'), icon: Icon(Icons.note_add)),
+    );
+  }
+}
+
+class WriteReportScreen extends StatefulWidget {
+  final String totId; final String totName; final SurvivorReport? survivorReport;
+  WriteReportScreen({required this.totId, required this.totName, this.survivorReport});
+  @override _WriteReportScreenState createState() => _WriteReportScreenState();
+}
+class _WriteReportScreenState extends State<WriteReportScreen> {
+  final _key = GlobalKey<FormState>();
+  String date='', time='', place='', survivorName='', incident='', policeOB='', actions='', sector='GBV / Violence';
+  void save() {
+    if(!_key.currentState!.validate()) return;
+    _key.currentState!.save();
+    var box = Hive.box('tot_reports');
+    var rep = TOTReport(id: Uuid().v4(), totId: widget.totId, totName: widget.totName, date: date, time: time, place: place, survivorName: survivorName.isEmpty ? widget.survivorReport?.survivorName ?? '' : survivorName, incident: incident, policeOB: policeOB, actions: actions, createdAt: DateTime.now(), sector: sector);
+    box.add(rep);
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('TOT Report Saved - Sector: $sector')));
+    Navigator.pop(context);
+  }
+  @override Widget build(BuildContext context){
+    return Scaffold(appBar: AppBar(title: Text('Write Report Form')), body: Form(key: _key, child: ListView(padding: EdgeInsets.all(16), children: [
+      DropdownButtonFormField(value: sector, items: TotData.sectors.map((s)=>DropdownMenuItem(value: s, child: Text(s))).toList(), onChanged: (v)=>setState(()=>sector=v!), decoration: InputDecoration(labelText: 'Sector', border: OutlineInputBorder())),
+      SizedBox(height: 12),
+      TextFormField(decoration: InputDecoration(labelText: 'Date (e.g 26/10/2026)', border: OutlineInputBorder()), onSaved: (v)=>date=v!, validator: (v)=>v!.isEmpty?'Required':null),
+      SizedBox(height: 12),
+      TextFormField(decoration: InputDecoration(labelText: 'Time', border: OutlineInputBorder()), onSaved: (v)=>time=v!, validator: (v)=>v!.isEmpty?'Required':null),
+      SizedBox(height: 12),
+      TextFormField(decoration: InputDecoration(labelText: 'Place / Village', border: OutlineInputBorder()), onSaved: (v)=>place=v!, validator: (v)=>v!.isEmpty?'Required':null),
+      SizedBox(height: 12),
+      TextFormField(initialValue: widget.survivorReport?.survivorName, decoration: InputDecoration(labelText: 'Survivor Name', border: OutlineInputBorder()), onSaved: (v)=>survivorName=v!),
+      SizedBox(height: 12),
+      TextFormField(maxLines: 3, decoration: InputDecoration(labelText: 'Incident / What happened', border: OutlineInputBorder()), onSaved: (v)=>incident=v!, validator: (v)=>v!.isEmpty?'Required':null),
+      SizedBox(height: 12),
+      if(sector=='GBV / Violence') TextFormField(decoration: InputDecoration(labelText: 'Police OB Number (required for GBV)', border: OutlineInputBorder()), onSaved: (v)=>policeOB=v??''),
+      if(sector!='GBV / Violence') TextFormField(decoration: InputDecoration(labelText: 'Referral / Facility / Notes (instead of OB)', border: OutlineInputBorder()), onSaved: (v)=>policeOB=v??''),
+      SizedBox(height: 12),
+      TextFormField(maxLines: 3, decoration: InputDecoration(labelText: 'Actions Taken', border: OutlineInputBorder()), onSaved: (v)=>actions=v!, validator: (v)=>v!.isEmpty?'Required':null),
+      SizedBox(height: 20),
+      ElevatedButton(onPressed: save, child: Text('SUBMIT TOT REPORT'), style: ElevatedButton.styleFrom(padding: EdgeInsets.symmetric(vertical: 16))),
+    ])));
+  }
+}
